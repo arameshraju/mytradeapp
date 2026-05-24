@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+myenv/
+.venv/
+venv/
+env/
+
+# SQLite database (local data)
+*.db
+
+# Streamlit
+.streamlit/
+
+# OS
+.DS_Store
+Thumbs.db
