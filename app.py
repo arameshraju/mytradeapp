@@ -1,4 +1,5 @@
 ﻿import streamlit as st
+from data.db_manager import init_db
 
 st.set_page_config(
     page_title="Trading App",
@@ -6,6 +7,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+init_db()
 
 pg = st.navigation([
     st.Page("pages/0_Dashboard.py", title="Dashboard",     icon="🏠"),

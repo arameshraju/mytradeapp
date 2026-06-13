@@ -7,12 +7,13 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
-from data.yf_data import resolve_ticker, fetch_last_price, fetch_option_expirations, fetch_option_chain
+from data.yf_data import resolve_ticker, fetch_last_price_with_source, fetch_option_expirations, fetch_option_chain
 from data.db_manager import (
     init_db,
     get_watchlist, add_watchlist, remove_watchlist,
     get_portfolio, add_portfolio, remove_portfolio,
     upsert_options_summary, get_options_summary,
+    get_data_source_settings, save_data_source_settings, reset_data_source_settings,
 )
 
 # ── Init DB ───────────────────────────────────────────────────────────────────
@@ -32,6 +33,58 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🏠 Dashboard")
+
+def _plan_label(primary_source: str, fallback_enabled: bool) -> str:
+    source_order = [primary_source]
+    if fallback_enabled:
+        alternate = "yahoo" if primary_source == "alpha_vantage" else "alpha_vantage"
+        source_order.append(alternate)
+    return " -> ".join(source_order)
+
+
+settings = get_data_source_settings()
+source_choices = {
+    "Alpha Vantage": "alpha_vantage",
+    "Yahoo Finance": "yahoo",
+}
+reverse_choices = {v: k for k, v in source_choices.items()}
+source_labels = list(source_choices.keys())
+default_source_label = reverse_choices.get(settings["market_data_primary"], "Alpha Vantage")
+default_source_index = source_labels.index(default_source_label)
+
+with st.sidebar:
+    st.title("⚙️ Settings")
+    st.divider()
+    st.subheader("🛰️ Market Data")
+    primary_source_label = st.selectbox(
+        "Primary Source",
+        options=source_labels,
+        index=default_source_index,
+        key="dashboard_primary_source",
+    )
+    fallback_enabled = st.checkbox(
+        "Fallback to other source",
+        value=settings["market_data_fallback_enabled"],
+        key="dashboard_fallback_enabled",
+    )
+    save_col, reset_col = st.columns(2)
+    if save_col.button("💾 Save", use_container_width=True):
+        save_data_source_settings(
+            source_choices[st.session_state["dashboard_primary_source"]],
+            st.session_state["dashboard_fallback_enabled"],
+        )
+        st.success("Data source settings saved.")
+        st.rerun()
+    if reset_col.button("♻️ Reset", use_container_width=True):
+        reset_settings = reset_data_source_settings()
+        st.session_state["dashboard_primary_source"] = reverse_choices[reset_settings["market_data_primary"]]
+        st.session_state["dashboard_fallback_enabled"] = reset_settings["market_data_fallback_enabled"]
+        st.success("Data source reset to default.")
+        st.rerun()
+
+primary_source = source_choices[primary_source_label]
+plan_label = _plan_label(primary_source, fallback_enabled)
+st.caption(f"Live price plan: {plan_label}")
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 
@@ -153,7 +206,11 @@ with col_wl:
         for item in wl_items:
             raw_ticker = item["ticker"]
             yf_ticker  = resolve_ticker(raw_ticker)
-            price      = fetch_last_price(yf_ticker)
+            price, _   = fetch_last_price_with_source(
+                yf_ticker,
+                primary_source=primary_source,
+                fallback_enabled=fallback_enabled,
+            )
             price_str  = f"${price:,.2f}" if price else "—"
 
             row = st.columns([1.4, 1.2, 0.9, 0.9, 0.5])
@@ -220,7 +277,11 @@ with col_pf:
         for pos in pf_items:
             raw_ticker  = pos["ticker"]
             yf_ticker   = resolve_ticker(raw_ticker)
-            cur_price   = fetch_last_price(yf_ticker)
+            cur_price, _ = fetch_last_price_with_source(
+                yf_ticker,
+                primary_source=primary_source,
+                fallback_enabled=fallback_enabled,
+            )
             entry       = pos["entry_price"]
             qty         = pos["quantity"]
             pnl         = (cur_price - entry) * qty if cur_price else None
@@ -301,7 +362,11 @@ if fetch_all:
                 errors.append(f"{raw_ticker}: no expirations found")
                 continue
 
-            spot = fetch_last_price(yf_ticker)
+            spot, _ = fetch_last_price_with_source(
+                yf_ticker,
+                primary_source=primary_source,
+                fallback_enabled=fallback_enabled,
+            )
             selected = _select_expiries(expirations)
 
             for expiry in selected:

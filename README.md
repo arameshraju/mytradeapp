@@ -28,6 +28,27 @@ streamlit run app.py
 
 Opens at **http://localhost:8501**
 
+## Alpha Vantage Setup (Default Source)
+
+The app now uses **Alpha Vantage as the default primary source** for price and OHLCV,
+with automatic fallback to Yahoo Finance.
+
+Create `.streamlit/secrets.toml`:
+
+```toml
+ALPHAVANTAGE_API_KEY = "your_api_key_here"
+```
+
+Fallback behavior:
+- If Alpha Vantage data is unavailable (missing key, throttle, unsupported symbol), the app fetches from Yahoo Finance.
+- The active data plan and final source used are shown in the UI.
+
+Options policy:
+- Options expirations and option chains are sourced from Yahoo Finance for consistency.
+- Spot price on the options page follows the selected primary/fallback plan.
+
+You can change/reset the primary source from the settings option box on each page and save it.
+
 ## Tickers to try
 | Instrument | Ticker |
 |---|---|

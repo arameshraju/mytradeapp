@@ -23,6 +23,11 @@ _DEFAULT_WATCHLIST = [
     ("BA",   "Boeing"),
 ]
 
+_DEFAULT_SETTINGS = {
+    "market_data_primary": "alpha_vantage",
+    "market_data_fallback_enabled": "1",
+}
+
 
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(_DB_PATH)
@@ -63,6 +68,12 @@ def init_db() -> None:
                 fetched_at     TEXT    NOT NULL,
                 UNIQUE(ticker, expiry_date) ON CONFLICT REPLACE
             );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key         TEXT PRIMARY KEY,
+                value       TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            );
         """)
 
         # Seed watchlist only when the table is empty
@@ -73,6 +84,12 @@ def init_db() -> None:
                 "INSERT OR IGNORE INTO watchlist (ticker, display_name, added_at) VALUES (?, ?, ?)",
                 [(t, d, now) for t, d in _DEFAULT_WATCHLIST],
             )
+
+        now = datetime.utcnow().isoformat()
+        conn.executemany(
+            "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)",
+            [(k, v, now) for k, v in _DEFAULT_SETTINGS.items()],
+        )
 
 
 # ── Watchlist ─────────────────────────────────────────────────────────────────
@@ -173,3 +190,58 @@ def get_options_summary(ticker: str | None = None) -> list[dict]:
                 "SELECT * FROM options_summary ORDER BY ticker, expiry_date"
             ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── App Settings ──────────────────────────────────────────────────────────────
+
+def get_setting(key: str, default: str | None = None) -> str | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?",
+            (key,),
+        ).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, value, datetime.utcnow().isoformat()),
+        )
+
+
+def get_data_source_settings() -> dict:
+    primary = get_setting("market_data_primary", _DEFAULT_SETTINGS["market_data_primary"])
+    fallback_raw = get_setting(
+        "market_data_fallback_enabled",
+        _DEFAULT_SETTINGS["market_data_fallback_enabled"],
+    )
+    return {
+        "market_data_primary": primary or _DEFAULT_SETTINGS["market_data_primary"],
+        "market_data_fallback_enabled": str(fallback_raw) == "1",
+    }
+
+
+def save_data_source_settings(primary: str, fallback_enabled: bool) -> dict:
+    primary_clean = (primary or _DEFAULT_SETTINGS["market_data_primary"]).strip().lower()
+    if primary_clean not in ("alpha_vantage", "yahoo"):
+        primary_clean = _DEFAULT_SETTINGS["market_data_primary"]
+
+    set_setting("market_data_primary", primary_clean)
+    set_setting("market_data_fallback_enabled", "1" if fallback_enabled else "0")
+    return get_data_source_settings()
+
+
+def reset_data_source_settings() -> dict:
+    save_data_source_settings(
+        _DEFAULT_SETTINGS["market_data_primary"],
+        _DEFAULT_SETTINGS["market_data_fallback_enabled"] == "1",
+    )
+    return get_data_source_settings()

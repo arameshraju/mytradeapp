@@ -13,7 +13,22 @@ import calendar
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 
-from data.yf_data import resolve_ticker, fetch_option_expirations, fetch_option_chain, fetch_last_price
+from data.db_manager import init_db, get_data_source_settings, save_data_source_settings, reset_data_source_settings
+from data.yf_data import (
+    resolve_ticker,
+    fetch_option_expirations,
+    fetch_option_chain,
+    fetch_last_price_with_source,
+)
+
+
+def _plan_label(meta: dict) -> str:
+    source_order = " -> ".join(meta.get("source_order", []))
+    source_used = meta.get("source_used") or "none"
+    return f"Spot plan: {source_order} | Source used: {source_used}"
+
+
+init_db()
 
 
 # ── Custom CSS ────────────────────────────────────────────────────────────────
@@ -156,6 +171,45 @@ def _add_sr_vlines(fig, resistances: list, supports: list) -> None:
 with st.sidebar:
     st.title("⚙️ Options Settings")
     st.divider()
+
+    settings = get_data_source_settings()
+    source_choices = {
+        "Alpha Vantage": "alpha_vantage",
+        "Yahoo Finance": "yahoo",
+    }
+    reverse_choices = {v: k for k, v in source_choices.items()}
+    source_labels = list(source_choices.keys())
+    default_source_label = reverse_choices.get(settings["market_data_primary"], "Alpha Vantage")
+    default_source_index = source_labels.index(default_source_label)
+
+    st.subheader("🛰️ Spot Data")
+    primary_source_label = st.selectbox(
+        "Primary Source",
+        options=source_labels,
+        index=default_source_index,
+        key="options_primary_source",
+    )
+    fallback_enabled = st.checkbox(
+        "Fallback to other source",
+        value=settings["market_data_fallback_enabled"],
+        key="options_fallback_enabled",
+    )
+    save_col, reset_col = st.columns(2)
+    if save_col.button("💾 Save", use_container_width=True):
+        save_data_source_settings(
+            source_choices[st.session_state["options_primary_source"]],
+            st.session_state["options_fallback_enabled"],
+        )
+        st.success("Data source settings saved.")
+        st.rerun()
+    if reset_col.button("♻️ Reset", use_container_width=True):
+        reset_settings = reset_data_source_settings()
+        st.session_state["options_primary_source"] = reverse_choices[reset_settings["market_data_primary"]]
+        st.session_state["options_fallback_enabled"] = reset_settings["market_data_fallback_enabled"]
+        st.success("Data source reset to default.")
+        st.rerun()
+
+    st.divider()
     _default_ticker = st.session_state.pop("selected_ticker", "SPY")
     ticker_raw = st.text_input(
         "Underlying Symbol", value=_default_ticker,
@@ -172,6 +226,7 @@ with st.sidebar:
 # ── Title ─────────────────────────────────────────────────────────────────────
 display_ticker = f"{ticker_raw} ({ticker})" if ticker_raw != ticker else ticker
 st.title(f"🎯  {display_ticker}  —  Options Chain")
+st.caption("Options chain and expirations are sourced from Yahoo Finance for reliability.")
 
 # ── Fetch expirations ─────────────────────────────────────────────────────────
 with st.spinner("Loading expiration dates…"):
@@ -246,7 +301,16 @@ with st.spinner(_spinner_msg):
         calls, puts = _aggregate_chains(ticker, selected_expiries)
     else:
         calls, puts = fetch_option_chain(ticker, selected_expiries[0])
-    spot = fetch_last_price(ticker)
+    spot, source_meta = fetch_last_price_with_source(
+        ticker,
+        primary_source=source_choices[primary_source_label],
+        fallback_enabled=fallback_enabled,
+    )
+
+st.caption(_plan_label(source_meta))
+failed_attempts = [a for a in source_meta.get("attempts", []) if not a.get("ok") and a.get("reason")]
+if source_meta.get("source_used") != source_meta.get("primary_source") and failed_attempts:
+    st.info(f"Primary spot source fallback reason: {failed_attempts[0]['reason']}")
 
 # If spot unavailable, fall back to midpoint of available strikes
 if spot is None and not calls.empty:
@@ -430,4 +494,4 @@ if show_table:
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.divider()
-st.caption(f"Data via yfinance · Options cached 5 min · Last loaded: {datetime.now().strftime('%H:%M:%S')}")
+st.caption(f"Options cached 5 min · Last loaded: {datetime.now().strftime('%H:%M:%S')}")

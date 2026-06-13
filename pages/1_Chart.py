@@ -5,7 +5,17 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
 
-from data.yf_data import resolve_ticker, fetch_ohlcv
+from data.db_manager import init_db, get_data_source_settings, save_data_source_settings, reset_data_source_settings
+from data.yf_data import resolve_ticker, fetch_ohlcv_with_source
+
+
+def _plan_label(meta: dict) -> str:
+    source_order = " -> ".join(meta.get("source_order", []))
+    source_used = meta.get("source_used") or "none"
+    return f"Plan: {source_order} | Source used: {source_used}"
+
+
+init_db()
 
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -27,6 +37,45 @@ st.markdown("""
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("⚙️ Settings")
+    st.divider()
+
+    settings = get_data_source_settings()
+    source_choices = {
+        "Alpha Vantage": "alpha_vantage",
+        "Yahoo Finance": "yahoo",
+    }
+    reverse_choices = {v: k for k, v in source_choices.items()}
+    source_labels = list(source_choices.keys())
+    default_source_label = reverse_choices.get(settings["market_data_primary"], "Alpha Vantage")
+    default_source_index = source_labels.index(default_source_label)
+
+    st.subheader("🛰️ Market Data")
+    primary_source_label = st.selectbox(
+        "Primary Source",
+        options=source_labels,
+        index=default_source_index,
+        key="chart_primary_source",
+    )
+    fallback_enabled = st.checkbox(
+        "Fallback to other source",
+        value=settings["market_data_fallback_enabled"],
+        key="chart_fallback_enabled",
+    )
+    save_col, reset_col = st.columns(2)
+    if save_col.button("💾 Save", use_container_width=True):
+        save_data_source_settings(
+            source_choices[st.session_state["chart_primary_source"]],
+            st.session_state["chart_fallback_enabled"],
+        )
+        st.success("Data source settings saved.")
+        st.rerun()
+    if reset_col.button("♻️ Reset", use_container_width=True):
+        reset_settings = reset_data_source_settings()
+        st.session_state["chart_primary_source"] = reverse_choices[reset_settings["market_data_primary"]]
+        st.session_state["chart_fallback_enabled"] = reset_settings["market_data_fallback_enabled"]
+        st.success("Data source reset to default.")
+        st.rerun()
+
     st.divider()
 
     _default_ticker = st.session_state.pop("selected_ticker", "ES=F")
@@ -94,7 +143,13 @@ def compute_bollinger(series, n=20, std=2):
 
 # ── Load Data ─────────────────────────────────────────────────────────────────
 with st.spinner(f"Fetching {ticker} data…"):
-    df = fetch_ohlcv(ticker, period, interval)
+    df, source_meta = fetch_ohlcv_with_source(
+        ticker,
+        period,
+        interval,
+        primary_source=source_choices[primary_source_label],
+        fallback_enabled=fallback_enabled,
+    )
 
 if df.empty:
     suggestion = ""
@@ -103,7 +158,13 @@ if df.empty:
     elif ticker_raw.upper() in ["SPX", "SPXW"]:
         suggestion = "  Try **^GSPC** for the S&P 500 index.  "
     st.error(f"⚠️ No data returned for **{ticker}**.{suggestion}Check the ticker symbol, period, or interval.")
+    st.caption(_plan_label(source_meta))
     st.stop()
+
+st.caption(_plan_label(source_meta))
+failed_attempts = [a for a in source_meta.get("attempts", []) if not a.get("ok") and a.get("reason")]
+if source_meta.get("source_used") != source_meta.get("primary_source") and failed_attempts:
+    st.info(f"Primary source fallback reason: {failed_attempts[0]['reason']}")
 
 # Compute
 df["RSI"]         = compute_rsi(df["Close"], rsi_period)
@@ -315,4 +376,4 @@ with right:
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.divider()
-st.caption(f"Data via yfinance · Auto-refreshes every 60s · Last loaded: {datetime.now().strftime('%H:%M:%S')}")
+st.caption(f"Auto-refreshes every 60s · Last loaded: {datetime.now().strftime('%H:%M:%S')}")
